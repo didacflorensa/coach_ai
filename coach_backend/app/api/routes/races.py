@@ -110,6 +110,8 @@ def delete_race(
     if not race:
         raise HTTPException(status_code=404, detail="race not found (or not owned by athlete)")
 
+    deleted_id = race.id
+    
     db.delete(race)
     db.commit()
-    return None
+    return {"status": "success", "deleted_id": deleted_id, "message": "Race deleted successfully"}

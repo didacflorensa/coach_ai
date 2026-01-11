@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { X, Activity, Loader2, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react';
 import { athleteService } from '../services/api';
 
-const ATHLETE_ID = 41916723;
 
 const ActivitiesPage = ({ onActivityClick }) => {
   const [activities, setActivities] = useState([]);
@@ -10,6 +9,8 @@ const ActivitiesPage = ({ onActivityClick }) => {
   const [page, setPage] = useState(0); 
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(true);
+  const [ATHLETE_ID] = useState(localStorage.getItem('athlete_id') || 0); // ID de atleta fijo para pruebas
+  
 
   useEffect(() => {
     const loadHistory = async () => {

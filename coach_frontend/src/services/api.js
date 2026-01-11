@@ -42,6 +42,36 @@ const request = async (endpoint, options = {}) => {
   return response.json();
 };
 
+// src/services/api.js
+
+const request_delete = async (endpoint, options = {}) => {
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      // ... tus otros headers como Authorization
+      ...options.headers,
+    },
+  });
+
+  // 1. Si la respuesta es 204 (No Content), salimos sin intentar leer JSON
+  if (response.status === 204) return null;
+
+  // 2. Si no es exitosa, lanzamos error (puedes personalizar esto)
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Error en la petición');
+  }
+
+  // 3. Verificamos si hay contenido antes de parsear
+  const contentType = response.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    return await response.json();
+  }
+
+  return null;
+};
+
 // --- SERVICIOS DE AUTENTICACIÓN (NUEVO EXPORT) ---
 export const authService = {
   register: async (email, password, athleteId, name) => {
@@ -64,9 +94,10 @@ export const authService = {
       body: JSON.stringify({ email, password }),
     });
     
-    if (data && data.access_token) {
+    if (data && data.access_token && data.athlete_id) {
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('strava_metrics_user', JSON.stringify(data));
+      localStorage.setItem('athlete_id', data.athlete_id);
     }
     return data;
   },
@@ -160,4 +191,21 @@ export const athleteService = {
   getRaces: async (athleteId) => {
     return request(`/races?athlete_id=${athleteId}`);
   },
+
+  createRace: async (athleteId, raceData) => {
+    return await request('/races', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...raceData,
+        athlete_id: athleteId // Nos aseguramos de enviar el ID del atleta
+      }),
+    });
+  },
+
+  deleteRace: async (raceId, athleteId) => {
+  // Ahora el endpoint espera el ID en la URL y el athlete_id como Query Param
+  return await request_delete(`/races/${raceId}?athlete_id=${athleteId}`, {
+    method: 'DELETE',
+  });
+},
 };

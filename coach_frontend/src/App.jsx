@@ -202,6 +202,12 @@ const AppContent = () => {
         <NavLink to="/activities" className={({ isActive }) => isActive ? 'text-blue-600' : 'text-slate-400'}><Activity size={24} /></NavLink>
         <NavLink to="/calendar" className={({ isActive }) => isActive ? 'text-blue-600' : 'text-slate-400'}><Calendar size={24} /></NavLink>
         <NavLink to="/profile" className={({ isActive }) => isActive ? 'text-blue-600' : 'text-slate-400'}><User size={24} /></NavLink>
+        <button 
+          onClick={handleLogout} 
+          className="text-red-500 hover:text-red-700 transition-colors"
+        >
+          <LogOut size={24} />
+        </button>
       </nav>
 
       {/* MODAL GLOBAL DE ACTIVIDAD */}
