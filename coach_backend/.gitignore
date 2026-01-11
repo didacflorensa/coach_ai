@@ -1,0 +1,44 @@
+# Entornos virtuales
+venv/
+env/
+.venv/
+
+# Archivos Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Variables de entorno
+.env
+.env.*
+
+# Logs
+*.log
+
+# Migraciones (si usas Alembic)
+alembic/versions/*.pyc
+
+# Bases de datos locales
+*.sqlite3
+*.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build / distribución
+build/
+dist/
+*.egg-info/
+
