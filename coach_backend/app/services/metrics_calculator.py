@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from math import sqrt
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 
@@ -238,73 +238,125 @@ def rebuild_daily_metrics(
 ) -> dict:
     profile = db.get(AthleteProfile, athlete_id)
 
-    # 1) todas las actividades del atleta
-    q_all = (
-        select(Activity)
-        .where(Activity.athlete_id == athlete_id)
-        .order_by(Activity.start_date.asc())
-    )
-    acts_all = db.execute(q_all).scalars().all()
+    # 0) Si no hay ninguna actividad en toda la vida del atleta, no podemos inferir rango por defecto
+    #    pero si el caller pasa day_from/day_to, aún así podemos crear DailyMetric "vacíos".
+    has_any_activity = db.execute(
+        select(func.count()).select_from(Activity).where(Activity.athlete_id == athlete_id)
+    ).scalar_one()
 
-    if not acts_all:
+    if not has_any_activity and (day_from is None or day_to is None):
         return {
             "athlete_id": athlete_id,
             "updated_activities": 0,
+            "updated_days": 0,
+            "updated_activity_metrics": 0,
             "daily_rows": 0,
             "range": None,
-            "note": "No hay actividades para este atleta.",
+            "note": "No hay actividades para este atleta (y no se indicó un rango day_from/day_to).",
         }
 
-    # 2) rellenar day antes de filtrar
+    # 1) Rellenar Activity.day SOLO para las que lo necesitan (o force)
+    #    (evita cargar todas)
+    q_need_day = (
+        select(Activity)
+        .where(Activity.athlete_id == athlete_id)
+        .where(or_(force, Activity.day.is_(None)))
+        .order_by(Activity.start_date.asc())
+    )
+    need_day_acts = db.execute(q_need_day).scalars().all()
+
     updated_days = 0
-    for a in acts_all:
-        if force or a.day is None:
-            a.day = compute_activity_day(a)
-            updated_days += 1
-        db.add(a)
-    db.commit()
+    if need_day_acts:
+        updates = []
+        for a in need_day_acts:
+            new_day = compute_activity_day(a)
+            updates.append({"id": a.id, "day": new_day})
+        db.bulk_update_mappings(Activity, updates)
+        db.commit()
+        updated_days = len(updates)
 
-    # 3) filtrar por rango
-    acts = acts_all
-    if day_from:
-        acts = [a for a in acts if a.day is not None and a.day >= day_from]
-    if day_to:
-        acts = [a for a in acts if a.day is not None and a.day <= day_to]
+    # 2) Determinar rango real a recalcular:
+    #    - si day_from/day_to vienen, SIEMPRE usarlos (incluso si no hay actividades en ese rango)
+    #    - si no vienen, inferir min/max de Activity.day (ya rellenado)
+    if day_from is not None and day_to is not None:
+        min_day, max_day = day_from, day_to
+    else:
+        minmax = db.execute(
+            select(func.min(Activity.day), func.max(Activity.day))
+            .where(Activity.athlete_id == athlete_id)
+        ).first()
+        min_day = minmax[0]
+        max_day = minmax[1]
+        if min_day is None or max_day is None:
+            # no hay day (caso raro) -> solo posible si no hay actividades, ya tratado arriba
+            return {
+                "athlete_id": athlete_id,
+                "updated_activities": updated_days,
+                "updated_days": updated_days,
+                "updated_activity_metrics": 0,
+                "daily_rows": 0,
+                "range": None,
+                "note": "No se pudo determinar rango (Activity.day vacío).",
+            }
+        # si solo te pasaron uno de los dos, lo respetamos
+        if day_from is not None:
+            min_day = day_from
+        if day_to is not None:
+            max_day = day_to
 
-    if not acts:
+    if min_day > max_day:
         return {
             "athlete_id": athlete_id,
             "updated_activities": updated_days,
+            "updated_days": updated_days,
+            "updated_activity_metrics": 0,
             "daily_rows": 0,
-            "range": {"from": str(day_from) if day_from else None, "to": str(day_to) if day_to else None},
-            "note": "No hay actividades en el rango indicado.",
+            "range": {"from": str(min_day), "to": str(max_day)},
+            "note": "Rango inválido (day_from > day_to).",
         }
 
-    # 4) calcular métricas por actividad
+    # 3) Recalcular métricas por actividad SOLO en el rango
+    #    (y solo las que lo necesiten)
+    q_range = (
+        select(Activity)
+        .where(Activity.athlete_id == athlete_id)
+        .where(Activity.day >= min_day, Activity.day <= max_day)
+        .order_by(Activity.start_date.asc())
+    )
+    acts_in_range = db.execute(q_range).scalars().all()
+
     updated_activity_metrics = 0
-    for a in acts:
-        sport = _sport_bucket(a.sport_type)
-        needs_work = (sport == "cycling" and a.work_kj is None)
-        needs = force or (a.tss is None) or (a.if_value is None) or (a.ef is None) or needs_work
-        if needs:
-            m = compute_activity_metrics(a, profile)
-            a.tss = m.tss
-            a.tss_method = m.tss_method
-            a.if_value = m.if_value
-            a.if_method = m.if_method
-            a.work_kj = m.work_kj
-            a.ef = m.ef
-            a.ef_method = m.ef_method
-            updated_activity_metrics += 1
-        db.add(a)
-    db.commit()
+    if acts_in_range:
+        updates = []
+        for a in acts_in_range:
+            sport = _sport_bucket(a.sport_type)
+            needs_work = (sport == "cycling" and a.work_kj is None)
 
-    # rango real
-    min_day = min(a.day for a in acts if a.day is not None)
-    max_day = max(a.day for a in acts if a.day is not None)
+            # Ojo: antes usabas "or a.ef is None" => eso recalcula EF incluso si no aplica.
+            # Mantengo tu lógica, pero puedes afinar si quieres.
+            needs = force or (a.tss is None) or (a.if_value is None) or (a.ef is None) or needs_work
 
-    # 5) agregados diarios desde activities: tss, duración, work_kj, EF ponderado
-    # EF ponderado por tiempo: sum(ef * secs) / sum(secs) usando solo filas con ef != NULL
+            if needs:
+                m = compute_activity_metrics(a, profile)
+                updates.append(
+                    {
+                        "id": a.id,
+                        "tss": m.tss,
+                        "tss_method": m.tss_method,
+                        "if_value": m.if_value,
+                        "if_method": m.if_method,
+                        "work_kj": m.work_kj,
+                        "ef": m.ef,
+                        "ef_method": m.ef_method,
+                    }
+                )
+
+        if updates:
+            db.bulk_update_mappings(Activity, updates)
+            db.commit()
+            updated_activity_metrics = len(updates)
+
+    # 4) Agregados diarios desde activities (solo devuelve días con actividad)
     agg_q = (
         select(
             Activity.day.label("day"),
@@ -312,9 +364,7 @@ def rebuild_daily_metrics(
             func.coalesce(func.sum(Activity.moving_time_s), 0).label("duration_s"),
             func.coalesce(func.sum(func.coalesce(Activity.work_kj, 0.0)), 0.0).label("work_kj"),
             func.coalesce(
-                func.sum(
-                    func.coalesce(Activity.ef, 0.0) * func.coalesce(Activity.moving_time_s, 0)
-                ),
+                func.sum(func.coalesce(Activity.ef, 0.0) * func.coalesce(Activity.moving_time_s, 0)),
                 0.0
             ).label("ef_weighted_sum"),
             func.coalesce(
@@ -334,11 +384,9 @@ def rebuild_daily_metrics(
     )
     daily_rows = db.execute(agg_q).all()
 
-    # Creamos mapa por día
-    daily_map = {}
+    daily_map: dict[date, dict] = {}
     for r in daily_rows:
-        d = r.day
-        daily_map[d] = {
+        daily_map[r.day] = {
             "tss": float(r.tss or 0.0),
             "duration_s": int(r.duration_s or 0),
             "work_kj": float(r.work_kj or 0.0),
@@ -346,18 +394,17 @@ def rebuild_daily_metrics(
             "ef_weighted_secs": int(r.ef_weighted_secs or 0),
         }
 
-    # lista completa de días (incluye días sin entreno)
+    # 5) Lista completa de días (incluye días sin entreno)
     days: list[date] = []
     cur = min_day
     while cur <= max_day:
         days.append(cur)
         cur += timedelta(days=1)
 
-    # semilla ctl/atl
+    # 6) Semilla ctl/atl desde el último DailyMetric anterior al rango
     prev = db.execute(
         select(DailyMetric)
-        .where(DailyMetric.athlete_id == athlete_id)
-        .where(DailyMetric.day < min_day)
+        .where(DailyMetric.athlete_id == athlete_id, DailyMetric.day < min_day)
         .order_by(DailyMetric.day.desc())
         .limit(1)
     ).scalars().first()
@@ -368,17 +415,17 @@ def rebuild_daily_metrics(
     CTL_TC = 42.0
     ATL_TC = 7.0
 
-    # upsert daily_metrics con nuevos campos
-    upserted = 0
+    # 7) Preparar filas y hacer UPSERT masivo (1 statement)
     now = datetime.utcnow()
+    rows_to_upsert = []
 
     for d in days:
-        data = daily_map.get(d, None)
+        data = daily_map.get(d)
         tss = float(data["tss"]) if data else 0.0
         duration_s = int(data["duration_s"]) if data else 0
         work_kj = float(data["work_kj"]) if data else 0.0
 
-        # IF diario derivado de TSS y duración: IF = sqrt(tss / (hours*100))
+        # IF diario derivado de TSS y duración
         if_value = None
         if duration_s > 0 and tss > 0:
             hours = duration_s / 3600.0
@@ -393,42 +440,43 @@ def rebuild_daily_metrics(
         ctl = ctl_prev + (tss - ctl_prev) / CTL_TC
         atl = atl_prev + (tss - atl_prev) / ATL_TC
 
-        stmt = (
-            insert(DailyMetric)
-            .values(
-                athlete_id=athlete_id,
-                day=d,
-                tss=tss,
-                duration_s=duration_s,
-                if_value=if_value,
-                work_kj=work_kj,
-                ef=ef,
-                ctl=ctl,
-                atl=atl,
-                tsb=tsb,
-                updated_at=now,
-            )
-            .on_conflict_do_update(
-                index_elements=["athlete_id", "day"],
-                set_={
-                    "tss": tss,
-                    "duration_s": duration_s,
-                    "if_value": if_value,
-                    "work_kj": work_kj,
-                    "ef": ef,
-                    "ctl": ctl,
-                    "atl": atl,
-                    "tsb": tsb,
-                    "updated_at": now,
-                },
-            )
+        rows_to_upsert.append(
+            {
+                "athlete_id": athlete_id,
+                "day": d,
+                "tss": tss,
+                "duration_s": duration_s,
+                "if_value": if_value,
+                "work_kj": work_kj,
+                "ef": ef,
+                "ctl": ctl,
+                "atl": atl,
+                "tsb": tsb,
+                "updated_at": now,
+            }
         )
-        db.execute(stmt)
-        upserted += 1
 
         ctl_prev, atl_prev = ctl, atl
 
-    db.commit()
+    if rows_to_upsert:
+        stmt = insert(DailyMetric).values(rows_to_upsert)
+        excluded = stmt.excluded
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["athlete_id", "day"],
+            set_={
+                "tss": excluded.tss,
+                "duration_s": excluded.duration_s,
+                "if_value": excluded.if_value,
+                "work_kj": excluded.work_kj,
+                "ef": excluded.ef,
+                "ctl": excluded.ctl,
+                "atl": excluded.atl,
+                "tsb": excluded.tsb,
+                "updated_at": excluded.updated_at,
+            },
+        )
+        db.execute(stmt)
+        db.commit()
 
     weekly = compute_weekly_summary(db, athlete_id, min_day, max_day)
 
@@ -437,7 +485,7 @@ def rebuild_daily_metrics(
         "updated_activities": updated_days + updated_activity_metrics,
         "updated_days": updated_days,
         "updated_activity_metrics": updated_activity_metrics,
-        "daily_rows": upserted,
+        "daily_rows": len(rows_to_upsert),
         "range": {"from": str(min_day), "to": str(max_day)},
         "weekly_summary": weekly,
     }

@@ -1,5 +1,28 @@
 const BASE_URL = 'http://localhost:8000';
 
+// En tu services/api.js o authService.js
+const stravaConfig = {
+  clientId: '178893',
+  redirectUri: 'http://localhost:5173/strava-callback', // La URL de tu app
+  scopes: 'read,activity:read_all'
+};
+
+export const stravaAuthService = {
+  // 1. Generar la URL a la que el usuario irá para autorizar
+  getConnectUrl: () => {
+    return `https://www.strava.com/oauth/authorize?client_id=${stravaConfig.clientId}&response_type=code&redirect_uri=${stravaConfig.redirectUri}&approval_prompt=auto&scope=${stravaConfig.scopes}`;
+  },
+
+  // 2. Enviar el código al backend para finalizar la vinculación
+  linkAccount: async (code) => {
+    // Este endpoint en tu backend recibirá el code y hará el intercambio por el token
+    return await request('/auth/strava/link', {
+      method: 'POST',
+      body: JSON.stringify({ code })
+    });
+  }
+};
+
 // Función auxiliar para formatear la fecha a YYYY-MM-DD
 const formatDate = (date) => date.toISOString().split('T')[0];
 
@@ -203,9 +226,16 @@ export const athleteService = {
   },
 
   deleteRace: async (raceId, athleteId) => {
-  // Ahora el endpoint espera el ID en la URL y el athlete_id como Query Param
-  return await request_delete(`/races/${raceId}?athlete_id=${athleteId}`, {
-    method: 'DELETE',
-  });
-},
+    // Ahora el endpoint espera el ID en la URL y el athlete_id como Query Param
+    return await request_delete(`/races/${raceId}?athlete_id=${athleteId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  updateActivity: async (athleteId, stravaActivityId, activityData) => {
+    return await request(`/athletes/${athleteId}/activities/${stravaActivityId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(activityData),
+    });
+  },
 };

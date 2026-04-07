@@ -1,18 +1,18 @@
 import React, { useState } from 'react';
 import { Zap, Loader2, UserPlus, ArrowLeft, CheckCircle2 } from 'lucide-react';
-import { authService } from '../services/api';
+import { authService, stravaAuthService } from '../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 
 const RegisterPage = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    id: '',
+    athleteId: '', // Asegúrate de que coincida con el "name" del input
     password: ''
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [isRegistered, setIsRegistered] = useState(false); // Estado para éxito
+  const [isRegistered, setIsRegistered] = useState(false);
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -28,20 +28,23 @@ const RegisterPage = () => {
       await authService.register(
         formData.email, 
         formData.password, 
-        formData.id, 
+        formData.athleteId, 
         formData.name
       );
-
       setIsRegistered(true);
-      // Esperamos 2 segundos para que vea el mensaje de éxito y redirigimos
       setTimeout(() => navigate('/login'), 2500);
-      
     } catch (err) {
-      setError(err.message || 'Error al crear la cuenta. Verifica los datos.');
+      setError(err.message || 'Error al crear la cuenta.');
     } finally {
       setLoading(false);
     }
   };
+
+  const handleConnect = () => {
+    // Redirige al usuario a la página de autorización de Strava
+    window.location.href = stravaAuthService.getConnectUrl();
+  };
+  
 
   if (isRegistered) {
     return (
@@ -107,6 +110,25 @@ const RegisterPage = () => {
           >
             {loading ? <Loader2 className="animate-spin" size={16} /> : <UserPlus size={16} />} 
             Crear Cuenta
+          </button>
+
+          {/* DIVISOR VISUAL */}
+          <div className="flex items-center gap-4 my-6">
+            <div className="h-px bg-slate-100 flex-1"></div>
+            <span className="text-[8px] font-black text-slate-300 uppercase tracking-[0.3em]">O también</span>
+            <div className="h-px bg-slate-100 flex-1"></div>
+          </div>
+
+          {/* BOTÓN DE STRAVA */}
+          <button 
+            type="button" // IMPORTANTE: para que no envíe el form
+            onClick={handleConnect}
+            className="w-full bg-[#FC6100] text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-[#E35600] transition-all shadow-xl shadow-orange-100 flex items-center justify-center gap-3 active:scale-95"
+          >
+            <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+               <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066l-2.084 4.116zM9.257 12.138l2.084-4.115h3.066L9.257 0 4.107 10.172h3.065l2.085 1.966z"/>
+            </svg>
+            Vincular Strava Directamente
           </button>
         </form>
       </div>

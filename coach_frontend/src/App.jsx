@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Link, Navigate } from 'react-router-dom';
 import { 
   LayoutDashboard, Activity, User, Zap, X, 
-  Loader2, RefreshCw, Calendar, Trash2, LogOut 
+  Loader2, RefreshCw, Calendar, Trash2, LogOut, Edit2, Save
 } from 'lucide-react';
 
 // Hooks y Servicios
@@ -16,6 +16,7 @@ import ProfilePage from './pages/Profile';
 import CalendarPage from './pages/Calendar'; 
 import LoginPage from './pages/Login';
 import RegisterPage from './pages/Register';
+import StravaCallback from './pages/StravaCallback';
 
 // Componentes Reutilizables
 import { ModalDataPoint } from './components/Dashboard';
@@ -26,6 +27,16 @@ const AppContent = () => {
   const [selectedAct, setSelectedAct] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState(null);
+
+  // Sincronizar el formulario cuando se selecciona una actividad
+  useEffect(() => {
+    if (selectedAct) {
+      setEditForm({ ...selectedAct });
+      setIsEditing(false);
+    }
+  }, [selectedAct]);
 
   // 1. Verificación de sesión inicial
   useEffect(() => {
@@ -66,6 +77,26 @@ const AppContent = () => {
     authService.logout();
     setUser(null);
     setSelectedAct(null);
+  };
+
+  const handleUpdateActivity = async () => {
+    try {
+      setIsSyncing(true);
+      setSyncStatus('Guardando cambios...');
+      const updated = await athleteService.updateActivity(
+        user.athlete_id, 
+        selectedAct.strava_activity_id, 
+        editForm
+      );
+      setSelectedAct(updated); // Actualiza la vista del modal
+      await refreshData(true); // Refresca las gráficas del dashboard
+      setIsEditing(false);
+      setIsSyncing(false);
+    } catch (err) {
+      console.error(err);
+      alert("Error al actualizar.");
+      setIsSyncing(false);
+    }
   };
 
   const handleDeleteActivity = async (activityId) => {
@@ -114,6 +145,7 @@ const AppContent = () => {
       <Routes>
         <Route path="/login" element={<LoginPage onLoginSuccess={(u) => setUser(u)} />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/strava-callback" element={<StravaCallback />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
@@ -192,6 +224,7 @@ const AppContent = () => {
           <Route path="/activities" element={<ActivitiesPage onActivityClick={setSelectedAct} />} />
           <Route path="/calendar" element={<CalendarPage activities={activities} onActivityClick={setSelectedAct} />} />
           <Route path="/profile" element={<ProfilePage user={user} />} />
+          <Route path="/strava-callback" element={<StravaCallback />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -211,21 +244,37 @@ const AppContent = () => {
       </nav>
 
       {/* MODAL GLOBAL DE ACTIVIDAD */}
-      {selectedAct && (
+      {selectedAct && editForm && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-300">
              <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-md" onClick={() => setSelectedAct(null)} />
              <div className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-[40px] shadow-2xl overflow-hidden flex flex-col">
                 <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
-                   <div>
+                  <div className="flex-1">
+                    {isEditing ? (
+                      <input 
+                        className="text-xl font-black text-slate-900 border-b-2 border-blue-500 outline-none w-full bg-blue-50/50 px-2"
+                        value={editForm?.name || ''}
+                        onChange={e => setEditForm({...editForm, name: e.target.value})}
+                      />
+                    ) : (
                       <h3 className="text-xl font-black text-slate-900 leading-tight">{selectedAct.name}</h3>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                        {selectedAct.day || new Date(selectedAct.start_date).toLocaleDateString()} • {selectedAct.sport_type}
-                      </p>
-                   </div>
-                   <div className="flex gap-2">
-                    <button onClick={() => handleDeleteActivity(selectedAct.id)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all">
-                      <Trash2 size={20} />
+                    )}
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+                      {selectedAct.day || new Date(selectedAct.start_date).toLocaleDateString()} • {selectedAct.sport_type}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4">
+                    <button 
+                      onClick={() => isEditing ? handleUpdateActivity() : setIsEditing(true)}
+                      className={`p-2 rounded-full transition-all ${isEditing ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:text-blue-500 hover:bg-blue-50'}`}
+                    >
+                      {isEditing ? <Save size={20} /> : <Edit2 size={20} />}
                     </button>
+                    {!isEditing && (
+                      <button onClick={() => handleDeleteActivity(selectedAct.id)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all">
+                        <Trash2 size={20} />
+                      </button>
+                    )}
                     <button onClick={() => setSelectedAct(null)} className="p-2 bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-colors">
                       <X size={20} />
                     </button>
@@ -237,48 +286,87 @@ const AppContent = () => {
                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 text-center">
                          <p className="text-[10px] font-bold text-blue-400 uppercase mb-1">TSS</p>
-                         <p className="text-2xl font-black text-blue-600">{selectedAct.tss?.toFixed(1) || '0'}</p>
+                         {isEditing ? (
+                            <input type="number" className="w-full bg-white border border-blue-200 rounded text-center font-bold" value={editForm.suffer_score || 0} onChange={e => setEditForm({...editForm, suffer_score: parseFloat(e.target.value)})}/>
+                         ) : (
+                            <p className="text-2xl font-black text-blue-600">{selectedAct.tss?.toFixed(1) || '0'}</p>
+                         )}
                       </div>
                       <div className="bg-purple-50/50 p-4 rounded-2xl border border-purple-100 text-center">
-                         <p className="text-[10px] font-bold text-purple-400 uppercase mb-1">IF</p>
-                         <p className="text-2xl font-black text-purple-600">{selectedAct.if_value?.toFixed(2) || '0'}</p>
+                         <p className="text-[10px] font-bold text-purple-400 uppercase mb-1">Potencia Med.</p>
+                         {isEditing ? (
+                            <input type="number" className="w-full bg-white border border-purple-200 rounded text-center font-bold" value={editForm.average_watts || 0} onChange={e => setEditForm({...editForm, average_watts: parseInt(e.target.value)})}/>
+                         ) : (
+                            <p className="text-2xl font-black text-purple-600">{selectedAct.average_watts || '--'}</p>
+                         )}
                       </div>
                       <div className="bg-orange-50/50 p-4 rounded-2xl border border-orange-100 text-center">
                          <p className="text-[10px] font-bold text-orange-400 uppercase mb-1">NP (Watts)</p>
-                         <p className="text-2xl font-black text-orange-600">{selectedAct.weighted_average_watts || '--'}</p>
+                         {isEditing ? (
+                            <input type="number" className="w-full bg-white border border-orange-200 rounded text-center font-bold" value={editForm.weighted_average_watts || 0} onChange={e => setEditForm({...editForm, weighted_average_watts: parseInt(e.target.value)})}/>
+                         ) : (
+                            <p className="text-2xl font-black text-orange-600">{selectedAct.weighted_average_watts || '--'}</p>
+                         )}
                       </div>
                       <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 text-center">
-                         <p className="text-[10px] font-bold text-emerald-400 uppercase mb-1">EF</p>
-                         <p className="text-2xl font-black text-emerald-600">{selectedAct.ef?.toFixed(2) || '0'}</p>
+                         <p className="text-[10px] font-bold text-emerald-400 uppercase mb-1">Distancia (m)</p>
+                         {isEditing ? (
+                            <input type="number" className="w-full bg-white border border-emerald-200 rounded text-center font-bold" value={editForm.distance_m || 0} onChange={e => setEditForm({...editForm, distance_m: parseFloat(e.target.value)})}/>
+                         ) : (
+                            <p className="text-2xl font-black text-emerald-600">{selectedAct.distance_m?.toFixed(0) || '0'}</p>
+                         )}
                       </div>
                    </div>
 
+                    {/* Detalle de esfuerzo y sesión */}
                     <div className="grid md:grid-cols-2 gap-x-16 gap-y-4">
-                      <div className="space-y-4">
-                        <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] border-b pb-1">Esfuerzo</h4>
-                        <ModalDataPoint label="Pulsaciones Medias" value={selectedAct.average_heartrate?.toFixed(0)} unit=" bpm"/>
-                        <ModalDataPoint label="Pulsaciones Máximas" value={selectedAct.max_heartrate} unit=" bpm" />
-                        <ModalDataPoint label="Potencia Media" value={selectedAct.average_watts?.toFixed(0)} unit=" w" />
-                        <ModalDataPoint label="Gasto Energético" value={selectedAct.kilojoules?.toFixed(0)} unit=" kj" />
-                      </div>
-                      <div className="space-y-4">
-                        <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] border-b pb-1">Sesión</h4>
-                        <ModalDataPoint label="Distancia" value={(selectedAct.distance_m / 1000).toFixed(1)} unit=" km" />
-                        <ModalDataPoint label="Duración" value={formatDuration(selectedAct.moving_time_s)} unit="" />
-                        <ModalDataPoint
-                          label="Ritmo"
-                          value={(() => {
-                            if (!selectedAct.distance_m) return "0:00";
-                            const pace = (selectedAct.moving_time_s / selectedAct.distance_m) * (1000 / 60);
-                            const minutes = Math.floor(pace);
-                            const seconds = Math.round((pace - minutes) * 60);
-                            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-                          })()}
-                          unit=" min/km"
-                        />
-                        <ModalDataPoint label="Velocidad Media" value={(selectedAct.average_speed * 3.6).toFixed(1)} unit=" km/h" />
-                      </div>
-                    </div>
+  <div className="space-y-4">
+    <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] border-b pb-1">Esfuerzo</h4>
+    {isEditing ? (
+      <>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">HR MEDIO</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.average_heartrate || 0} onChange={e => setEditForm({...editForm, average_heartrate: parseInt(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">HR MAX</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.max_heartrate || 0} onChange={e => setEditForm({...editForm, max_heartrate: parseInt(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">POTENCIA (W)</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.average_watts || 0} onChange={e => setEditForm({...editForm, average_watts: parseInt(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">ENERGÍA (KJ)</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.kilojoules || 0} onChange={e => setEditForm({...editForm, kilojoules: parseInt(e.target.value)})}/></div>
+      </>
+    ) : (
+      <>
+        <ModalDataPoint label="Pulsaciones Medias" value={selectedAct.average_heartrate?.toFixed(0)} unit=" bpm"/>
+        <ModalDataPoint label="Pulsaciones Máximas" value={selectedAct.max_heartrate} unit=" bpm" />
+        <ModalDataPoint label="Potencia Media" value={selectedAct.average_watts?.toFixed(0)} unit=" w" />
+        <ModalDataPoint label="Gasto Energético" value={selectedAct.kilojoules?.toFixed(0)} unit=" kj" />
+      </>
+    )}
+  </div>
+  <div className="space-y-4">
+    <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] border-b pb-1">Sesión</h4>
+    {isEditing ? (
+      <>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">DISTANCIA (M)</span><input type="number" className="w-24 text-right border-b outline-none focus:border-blue-500" value={editForm.distance_m || 0} onChange={e => setEditForm({...editForm, distance_m: parseFloat(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">TIEMPO (S)</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.moving_time_s || 0} onChange={e => setEditForm({...editForm, moving_time_s: parseInt(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">ELEVACIÓN (M)</span><input type="number" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.total_elevation_gain_m || 0} onChange={e => setEditForm({...editForm, total_elevation_gain_m: parseInt(e.target.value)})}/></div>
+        <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-400">VELOCIDAD (M/S)</span><input type="number" step="0.1" className="w-20 text-right border-b outline-none focus:border-blue-500" value={editForm.average_speed || 0} onChange={e => setEditForm({...editForm, average_speed: parseFloat(e.target.value)})}/></div>
+      </>
+    ) : (
+      <>
+        <ModalDataPoint label="Distancia" value={(selectedAct.distance_m / 1000).toFixed(1)} unit=" km" />
+        <ModalDataPoint label="Duración" value={formatDuration(selectedAct.moving_time_s)} unit="" />
+        <ModalDataPoint
+          label="Ritmo"
+          value={(() => {
+            if (!selectedAct.distance_m) return "0:00";
+            const pace = (selectedAct.moving_time_s / selectedAct.distance_m) * (1000 / 60);
+            const minutes = Math.floor(pace);
+            const seconds = Math.round((pace - minutes) * 60);
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          })()}
+          unit=" min/km"
+        />
+        <ModalDataPoint label="Velocidad Media" value={(selectedAct.average_speed * 3.6).toFixed(1)} unit=" km/h" />
+      </>
+    )}
+  </div>
+</div>
                 </div>
              </div>
           </div>

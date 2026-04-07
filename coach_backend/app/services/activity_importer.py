@@ -120,11 +120,16 @@ def upsert_activities(db: Session, athlete_id: int, activities: list[dict]) -> i
         "updated_at": datetime.utcnow(),
     }
 
-    stmt = stmt.on_conflict_do_update(
+    stmt = insert(Activity).values(rows)
+
+    # ⛔️ Ya NO hacemos update_cols ni on_conflict_do_update
+    # ✅ Si existe (conflict), no inserta y no modifica
+    stmt = stmt.on_conflict_do_nothing(
         constraint="uq_activity_strava_id",
-        set_=update_cols,
     )
 
     result = db.execute(stmt)
     db.commit()
-    return result.rowcount or len(rows)
+
+    # rowcount = número de filas realmente insertadas
+    return int(result.rowcount or 0)
